@@ -13,9 +13,13 @@ jobs:
     steps:
     - name: Check for halftime games
       run: |
+        # Get today's date in YYYYMMDD format
+        TODAY=$(date -u +%Y%m%d)
+        
         # Fetch ESPN scoreboard data with groups parameter to get ALL games (not just top 25)
         # groups=50 gets all Division I games
-        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50")
+        # dates parameter ensures we get today's games
+        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY")
         
         # Save to file for processing
         echo "$response" > games.json
