@@ -58,6 +58,19 @@ jobs:
         # Send notifications for each halftime game
         webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
         
+        # Debug output
+        print(f"\n📊 API Response Summary:")
+        print(f"Total games found: {len(data.get('events', []))}")
+        if data.get('events'):
+            print(f"\nAll games in response:")
+            for event in data['events']:
+                competition = event['competitions'][0]
+                status_detail = competition['status']['type']['detail']
+                home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
+                away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
+                if home_team and away_team:
+                    print(f"  - {away_team['team']['displayName']} @ {home_team['team']['displayName']} [{status_detail}]")
+        
         if halftime_games and webhook_url:
             for game in halftime_games:
                 # Create Slack message with rich formatting
