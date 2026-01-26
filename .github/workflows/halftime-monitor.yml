@@ -2,9 +2,8 @@ name: NCAAB Halftime Monitor
 
 on:
   schedule:
-    # Runs every 15 minutes during basketball season
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual trigger for testing
+  workflow_dispatch:
 
 jobs:
   check-halftime:
@@ -30,16 +29,88 @@ jobs:
         with open('games.json', 'r') as f:
             data = json.load(f)
         
-        # Check for halftime games
-        halftime_games = []
+        webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
         
+        # TEST MODE: Always send a test notification
+        print("🧪 TEST MODE ENABLED - Sending test notification...")
+        
+        if webhook_url:
+            # Create a test game
+            test_game = {
+                'away_team': 'Duke Blue Devils',
+                'away_score': '42',
+                'home_team': 'North Carolina Tar Heels',
+                'home_score': '38',
+                'broadcast': 'ESPN'
+            }
+            
+            slack_message = {
+                "text": f"🧪 TEST: 🏀 HALFTIME: {test_game['away_team']} {test_game['away_score']} - {test_game['home_score']} {test_game['home_team']}",
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "🧪 TEST - 🏀 HALFTIME",
+                            "emoji": True
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "_This is a test notification. Your bot is working!_"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "fields": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*{test_game['away_team']}*\n{test_game['away_score']} points"
+                            },
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*{test_game['home_team']}*\n{test_game['home_score']} points"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"📺 {test_game['broadcast']}"
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Send to Slack
+            req = urllib.request.Request(
+                webhook_url,
+                data=json.dumps(slack_message).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            try:
+                with urllib.request.urlopen(req) as response:
+                    print(f"✓ Test notification sent successfully!")
+                    print(f"✓ When real games are at halftime, you'll see notifications like this")
+            except Exception as e:
+                print(f"✗ Error sending notification: {e}")
+        else:
+            print("✗ No webhook URL found!")
+        
+        # Also check real games
+        halftime_games = []
         if 'events' in data and data['events']:
             for event in data['events']:
                 competition = event['competitions'][0]
                 status = competition['status']['type']['name']
                 status_detail = competition['status']['type']['detail']
                 
-                # Check if at halftime
                 if status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower():
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
@@ -54,62 +125,10 @@ jobs:
                         }
                         halftime_games.append(game)
         
-        # Send notifications for each halftime game
-        webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
-        
-        if halftime_games and webhook_url:
-            for game in halftime_games:
-                # Create Slack message with rich formatting
-                slack_message = {
-                    "text": f"🏀 HALFTIME: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']}",
-                    "blocks": [
-                        {
-                            "type": "header",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "🏀 HALFTIME",
-                                "emoji": True
-                            }
-                        },
-                        {
-                            "type": "section",
-                            "fields": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*{game['away_team']}*\n{game['away_score']} points"
-                                },
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*{game['home_team']}*\n{game['home_score']} points"
-                                }
-                            ]
-                        },
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"📺 {game['broadcast']}"
-                                }
-                            ]
-                        }
-                    ]
-                }
-                
-                # Send to Slack
-                req = urllib.request.Request(
-                    webhook_url,
-                    data=json.dumps(slack_message).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'}
-                )
-                
-                try:
-                    with urllib.request.urlopen(req) as response:
-                        print(f"✓ Sent notification: {game['away_team']} vs {game['home_team']}")
-                except Exception as e:
-                    print(f"✗ Error sending notification: {e}")
+        if halftime_games:
+            print(f"\n✓ Also found {len(halftime_games)} REAL game(s) at halftime!")
         else:
-            print(f"No games at halftime right now. Checked {len(data.get('events', []))} games.")
+            print(f"\nℹ️ No real games at halftime right now. Checked {len(data.get('events', []))} games.")
         EOF
         
         # Run the Python script
