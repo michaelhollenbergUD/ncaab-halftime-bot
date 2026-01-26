@@ -1,0 +1,118 @@
+name: NCAAB Halftime Monitor
+
+on:
+  schedule:
+    # Runs every 15 minutes during basketball season
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Allows manual trigger for testing
+
+jobs:
+  check-halftime:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check for halftime games
+      run: |
+        # Fetch ESPN scoreboard data
+        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard")
+        
+        # Save to file for processing
+        echo "$response" > games.json
+        
+        # Create Python script to process data
+        cat << 'EOF' > check_halftime.py
+        import json
+        import os
+        import urllib.request
+        import urllib.parse
+        
+        # Read the games data
+        with open('games.json', 'r') as f:
+            data = json.load(f)
+        
+        # Check for halftime games
+        halftime_games = []
+        
+        if 'events' in data and data['events']:
+            for event in data['events']:
+                competition = event['competitions'][0]
+                status = competition['status']['type']['name']
+                status_detail = competition['status']['type']['detail']
+                
+                # Check if at halftime
+                if status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower():
+                    home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
+                    away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
+                    
+                    if home_team and away_team:
+                        game = {
+                            'away_team': away_team['team']['displayName'],
+                            'away_score': away_team['score'],
+                            'home_team': home_team['team']['displayName'],
+                            'home_score': home_team['score'],
+                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info'
+                        }
+                        halftime_games.append(game)
+        
+        # Send notifications for each halftime game
+        webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
+        
+        if halftime_games and webhook_url:
+            for game in halftime_games:
+                # Create Slack message with rich formatting
+                slack_message = {
+                    "text": f"🏀 HALFTIME: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']}",
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "🏀 HALFTIME",
+                                "emoji": True
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*{game['away_team']}*\n{game['away_score']} points"
+                                },
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"*{game['home_team']}*\n{game['home_score']} points"
+                                }
+                            ]
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"📺 {game['broadcast']}"
+                                }
+                            ]
+                        }
+                    ]
+                }
+                
+                # Send to Slack
+                req = urllib.request.Request(
+                    webhook_url,
+                    data=json.dumps(slack_message).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                try:
+                    with urllib.request.urlopen(req) as response:
+                        print(f"✓ Sent notification: {game['away_team']} vs {game['home_team']}")
+                except Exception as e:
+                    print(f"✗ Error sending notification: {e}")
+        else:
+            print(f"No games at halftime right now. Checked {len(data.get('events', []))} games.")
+        EOF
+        
+        # Run the Python script
+        python3 check_halftime.py
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
