@@ -13,8 +13,8 @@ jobs:
     steps:
     - name: Check for halftime games
       run: |
-        # Fetch ESPN scoreboard data
-        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard")
+        # Fetch ESPN scoreboard data with limit to get ALL games
+        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?limit=100")
         
         # Save to file for processing
         echo "$response" > games.json
