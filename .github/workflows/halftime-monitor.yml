@@ -1,9 +1,6 @@
 name: NCAAB Halftime Monitor
 
 on:
-  schedule:
-    # Runs every 12 minutes - activated
-    - cron: '*/12 * * * *'
   workflow_dispatch: # Allows manual trigger for testing
 
 jobs:
