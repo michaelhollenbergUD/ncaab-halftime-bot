@@ -130,7 +130,7 @@ jobs:
         else:
             print(f"No games at halftime right now. Checked {len(data.get('events', []))} games.")
         EOF
-        
+        # Schedule activated
         # Run the Python script
         python3 check_halftime.py
       env:
