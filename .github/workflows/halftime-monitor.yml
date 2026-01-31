@@ -1,16 +1,16 @@
 name: NCAAB Halftime Monitor
 
 on:
-  schedule:
-    # Runs every 15 minutes during basketball season
-    - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual trigger for testing
+  workflow_dispatch: # Allows manual trigger and API trigger
 
 jobs:
   check-halftime:
     runs-on: ubuntu-latest
     
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
     - name: Check for halftime games
       run: |
         # Get today's date in Eastern Time (YYYYMMDD format)
@@ -25,54 +25,39 @@ jobs:
         # Save to file for processing
         echo "$response" > games.json
         
+        # Create state file if it doesn't exist
+        touch alerted_games.txt
+        
         # Create Python script to process data
         cat << 'EOF' > check_halftime.py
         import json
         import os
         import urllib.request
         import urllib.parse
+        from datetime import datetime
         
         # Read the games data
         with open('games.json', 'r') as f:
             data = json.load(f)
         
-        # Load previously alerted game IDs (if file exists)
+        # Read previously alerted games
         alerted_games = set()
         try:
             with open('alerted_games.txt', 'r') as f:
-                alerted_games = set(f.read().strip().split(','))
-        except FileNotFoundError:
+                content = f.read().strip()
+                if content:
+                    alerted_games = set(content.split(','))
+        except:
             pass
+        
+        # Get current date for daily reset
+        current_date = datetime.now().strftime('%Y%m%d')
+        
+        # Filter out old alerts (from previous days)
+        alerted_games = {g for g in alerted_games if g.startswith(current_date)}
         
         # Check for halftime games
         halftime_games = []
-        
-        if 'events' in data and data['events']:
-            for event in data['events']:
-                game_id = event['id']
-                competition = event['competitions'][0]
-                status = competition['status']['type']['name']
-                status_detail = competition['status']['type']['detail']
-                
-                # Check if at halftime AND not already alerted
-                if (status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower()) and game_id not in alerted_games:
-                    home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
-                    away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
-                    
-                    if home_team and away_team:
-                        game = {
-                            'id': game_id,
-                            'away_team': away_team['team']['displayName'],
-                            'away_score': away_team['score'],
-                            'home_team': home_team['team']['displayName'],
-                            'home_score': home_team['score'],
-                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info'
-                        }
-                        halftime_games.append(game)
-                        alerted_games.add(game_id)
-        
-        # Send notifications for each halftime game
-        webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
         
         # Debug output
         print(f"\n📊 API Response Summary:")
@@ -86,6 +71,37 @@ jobs:
                 away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                 if home_team and away_team:
                     print(f"  - {away_team['team']['displayName']} @ {home_team['team']['displayName']} [{status_detail}]")
+        
+        if 'events' in data and data['events']:
+            for event in data['events']:
+                game_id = event['id']
+                competition = event['competitions'][0]
+                status = competition['status']['type']['name']
+                status_detail = competition['status']['type']['detail']
+                
+                # Create unique daily key (date + game_id)
+                daily_game_key = f"{current_date}_{game_id}"
+                
+                # Check if at halftime AND not already alerted today
+                if (status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower()) and daily_game_key not in alerted_games:
+                    home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
+                    away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
+                    
+                    if home_team and away_team:
+                        game = {
+                            'id': game_id,
+                            'daily_key': daily_game_key,
+                            'away_team': away_team['team']['displayName'],
+                            'away_score': away_team['score'],
+                            'home_team': home_team['team']['displayName'],
+                            'home_score': home_team['score'],
+                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info'
+                        }
+                        halftime_games.append(game)
+                        alerted_games.add(daily_game_key)
+        
+        # Send notifications for each halftime game
+        webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
         
         if halftime_games and webhook_url:
             for game in halftime_games:
@@ -139,10 +155,24 @@ jobs:
                 except Exception as e:
                     print(f"✗ Error sending notification: {e}")
         else:
-            print(f"No games at halftime right now. Checked {len(data.get('events', []))} games.")
+            print(f"\nNo NEW games at halftime right now.")
+        
+        # Save updated alerted games
+        with open('alerted_games.txt', 'w') as f:
+            f.write(','.join(sorted(alerted_games)))
+        
+        print(f"\nAlerted games today: {len(alerted_games)}")
         EOF
         
         # Run the Python script
         python3 check_halftime.py
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    - name: Commit state file
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add alerted_games.txt || true
+        git commit -m "Update alerted games state [skip ci]" || true
+        git push || true
