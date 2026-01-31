@@ -1,6 +1,9 @@
 name: NCAAB Halftime Monitor
 
 on:
+  schedule:
+    # Runs every 15 minutes during basketball season
+    - cron: '*/15 * * * *'
   workflow_dispatch: # Allows manual trigger for testing
 
 jobs:
@@ -33,22 +36,32 @@ jobs:
         with open('games.json', 'r') as f:
             data = json.load(f)
         
+        # Load previously alerted game IDs (if file exists)
+        alerted_games = set()
+        try:
+            with open('alerted_games.txt', 'r') as f:
+                alerted_games = set(f.read().strip().split(','))
+        except FileNotFoundError:
+            pass
+        
         # Check for halftime games
         halftime_games = []
         
         if 'events' in data and data['events']:
             for event in data['events']:
+                game_id = event['id']
                 competition = event['competitions'][0]
                 status = competition['status']['type']['name']
                 status_detail = competition['status']['type']['detail']
                 
-                # Check if at halftime
-                if status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower():
+                # Check if at halftime AND not already alerted
+                if (status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower()) and game_id not in alerted_games:
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                     
                     if home_team and away_team:
                         game = {
+                            'id': game_id,
                             'away_team': away_team['team']['displayName'],
                             'away_score': away_team['score'],
                             'home_team': home_team['team']['displayName'],
@@ -56,6 +69,7 @@ jobs:
                             'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info'
                         }
                         halftime_games.append(game)
+                        alerted_games.add(game_id)
         
         # Send notifications for each halftime game
         webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
@@ -127,7 +141,7 @@ jobs:
         else:
             print(f"No games at halftime right now. Checked {len(data.get('events', []))} games.")
         EOF
-        # Schedule activated
+        
         # Run the Python script
         python3 check_halftime.py
       env:
