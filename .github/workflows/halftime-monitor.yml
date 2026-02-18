@@ -1,4 +1,4 @@
-name: NCAAB Halftime Monitor
+name: NCAAB Under 10 Min Monitor
 
 on:
   workflow_dispatch: # Allows manual trigger and API trigger
@@ -11,7 +11,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Check for halftime games
+    - name: Check for games under 10 minutes
       run: |
         # Get today's date in Eastern Time (YYYYMMDD format)
         # ESPN uses Eastern Time for college basketball games
@@ -78,12 +78,28 @@ jobs:
                 competition = event['competitions'][0]
                 status = competition['status']['type']['name']
                 status_detail = competition['status']['type']['detail']
+                display_clock = competition['status'].get('displayClock', '')
+                period = competition['status'].get('period', 0)
                 
                 # Create unique daily key (date + game_id)
                 daily_game_key = f"{current_date}_{game_id}"
                 
-                # Check if at halftime AND not already alerted today
-                if (status == 'STATUS_HALFTIME' or 'halftime' in status_detail.lower()) and daily_game_key not in alerted_games:
+                # Check if game is in 2nd half (period 2) and has less than 10 minutes left
+                # AND not already alerted today
+                is_second_half = period == 2
+                is_in_progress = status == 'STATUS_IN_PROGRESS'
+                
+                # Parse clock time (format is usually "MM:SS" like "9:45" or "5:23")
+                time_under_10_min = False
+                if display_clock and ':' in display_clock:
+                    try:
+                        parts = display_clock.split(':')
+                        minutes = int(parts[0])
+                        time_under_10_min = minutes < 10
+                    except:
+                        pass
+                
+                if is_second_half and is_in_progress and time_under_10_min and daily_game_key not in alerted_games:
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                     
@@ -95,7 +111,8 @@ jobs:
                             'away_score': away_team['score'],
                             'home_team': home_team['team']['displayName'],
                             'home_score': home_team['score'],
-                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info'
+                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info',
+                            'time_remaining': display_clock
                         }
                         halftime_games.append(game)
                         alerted_games.add(daily_game_key)
@@ -107,13 +124,13 @@ jobs:
             for game in halftime_games:
                 # Create Slack message with rich formatting
                 slack_message = {
-                    "text": f"🏀 HALFTIME: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']}",
+                    "text": f"⏰ UNDER 10 MIN: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']} ({game['time_remaining']} left)",
                     "blocks": [
                         {
                             "type": "header",
                             "text": {
                                 "type": "plain_text",
-                                "text": "🏀 HALFTIME",
+                                "text": "⏰ UNDER 10 MINUTES",
                                 "emoji": True
                             }
                         },
@@ -135,7 +152,7 @@ jobs:
                             "elements": [
                                 {
                                     "type": "mrkdwn",
-                                    "text": f"📺 {game['broadcast']}"
+                                    "text": f"⏱️ {game['time_remaining']} remaining • 📺 {game['broadcast']}"
                                 }
                             ]
                         }
