@@ -97,9 +97,9 @@ jobs:
                         current_time_utc = datetime.now(timezone.utc)
                         time_until_game = game_start - current_time_utc
                         
-                        # Check if game starts in 0-10 minutes (window to catch 5min mark)
+                        # Check if game starts in 0-20 minutes (window to catch 15min mark)
                         minutes_until = time_until_game.total_seconds() / 60
-                        within_5_minutes = 0 <= minutes_until <= 10
+                        within_5_minutes = 0 <= minutes_until <= 20
                     except:
                         pass
                 
