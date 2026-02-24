@@ -83,12 +83,14 @@ jobs:
                 # Create unique daily key (date + game_id)
                 daily_game_key = f"{current_date}_{game_id}"
                 
-                # Check if game is scheduled (not started yet) AND within 5 minutes of start time
+                # Check if game is scheduled (not started yet) AND within 20 minutes of start time
+                # OR just started (within 5 minutes of starting) to catch edge cases
                 # AND not already alerted today
                 is_scheduled = status == 'STATUS_SCHEDULED'
+                just_started = status == 'STATUS_IN_PROGRESS'
                 
-                # Parse game start time and check if it's within 5 minutes
-                within_5_minutes = False
+                # Parse game start time and check if it's within alert window
+                within_alert_window = False
                 if game_date:
                     try:
                         from datetime import datetime, timezone, timedelta
@@ -97,13 +99,14 @@ jobs:
                         current_time_utc = datetime.now(timezone.utc)
                         time_until_game = game_start - current_time_utc
                         
-                        # Check if game starts in 0-20 minutes (window to catch 15min mark)
+                        # Check if game starts in -5 to +20 minutes
+                        # Negative means game already started (catch games that just tipped off)
                         minutes_until = time_until_game.total_seconds() / 60
-                        within_5_minutes = 0 <= minutes_until <= 20
+                        within_alert_window = -5 <= minutes_until <= 20
                     except:
                         pass
                 
-                if is_scheduled and within_5_minutes and daily_game_key not in alerted_games:
+                if (is_scheduled or (just_started and within_alert_window)) and within_alert_window and daily_game_key not in alerted_games:
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                     
@@ -114,6 +117,9 @@ jobs:
                             game_start = datetime.fromisoformat(game_date.replace('Z', '+00:00'))
                             current_time_utc = datetime.now(timezone.utc)
                             minutes_until = int((game_start - current_time_utc).total_seconds() / 60)
+                            # If negative, game already started
+                            if minutes_until < 0:
+                                minutes_until = 0
                         except:
                             minutes_until = 5
                         
