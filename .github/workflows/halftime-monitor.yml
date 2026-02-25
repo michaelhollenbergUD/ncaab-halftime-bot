@@ -83,15 +83,13 @@ jobs:
                 # Create unique daily key (date + game_id)
                 daily_game_key = f"{current_date}_{game_id}"
                 
-                # Check if game is scheduled (not started yet) AND within 20 minutes of start time
-                # OR just started (within 5 minutes of starting) to catch edge cases
+                # Check if game is ONLY scheduled (not started yet) AND within 20 minutes of start time
                 # AND not already alerted today
                 is_scheduled = status == 'STATUS_SCHEDULED'
-                just_started = status == 'STATUS_IN_PROGRESS'
                 
                 # Parse game start time and check if it's within alert window
                 within_alert_window = False
-                if game_date:
+                if game_date and is_scheduled:  # Only check timing if game is scheduled
                     try:
                         from datetime import datetime, timezone, timedelta
                         # Parse the ISO timestamp
@@ -99,14 +97,13 @@ jobs:
                         current_time_utc = datetime.now(timezone.utc)
                         time_until_game = game_start - current_time_utc
                         
-                        # Check if game starts in -5 to +20 minutes
-                        # Negative means game already started (catch games that just tipped off)
+                        # Check if game starts in 0 to 20 minutes
                         minutes_until = time_until_game.total_seconds() / 60
-                        within_alert_window = -5 <= minutes_until <= 20
+                        within_alert_window = 0 <= minutes_until <= 20
                     except:
                         pass
                 
-                if (is_scheduled or (just_started and within_alert_window)) and within_alert_window and daily_game_key not in alerted_games:
+                if is_scheduled and within_alert_window and daily_game_key not in alerted_games:
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                     
