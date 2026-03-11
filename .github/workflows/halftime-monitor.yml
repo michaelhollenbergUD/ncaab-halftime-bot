@@ -1,52 +1,49 @@
-name: NCAAB Under 10 Min Monitor
+name: ATP Tennis Monitor
 
 on:
   workflow_dispatch: # Allows manual trigger and API trigger
 
 jobs:
-  check-halftime:
+  check-tennis:
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Check for games under 10 minutes
+    - name: Check for tennis matches
       run: |
         # Get today's date in Eastern Time (YYYYMMDD format)
-        # ESPN uses Eastern Time for college basketball games
         TODAY=$(TZ='America/New_York' date +%Y%m%d)
         
-        # Fetch ESPN scoreboard data with groups parameter to get ALL games (not just top 25)
-        # groups=50 gets all Division I games
-        # dates parameter ensures we get today's games in Eastern Time
-        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY")
+        # Fetch ESPN tennis scoreboard data
+        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard?dates=$TODAY")
         
         # Save to file for processing
-        echo "$response" > games.json
+        echo "$response" > matches.json
         
         # Create state file if it doesn't exist
-        touch alerted_games.txt
+        touch alerted_matches.txt
         
         # Create Python script to process data
-        cat << 'EOF' > check_halftime.py
+        cat << 'EOF' > check_tennis.py
         import json
         import os
         import urllib.request
         import urllib.parse
         from datetime import datetime
         
-        # Read the games data
-        with open('games.json', 'r') as f:
+        # Read the matches data
+        with open('matches.json', 'r') as f:
             data = json.load(f)
         
-        # Read previously alerted games
-        alerted_games = set()
+        # Read previously alerted matches
+        alerted_matches = set()
         try:
-            with open('alerted_games.txt', 'r') as f:
+            with open('alerted_matches.txt', 'r') as f:
                 content = f.read().strip()
                 if content:
-                    alerted_games = set(content.split(','))
+                    alerted_matches = set(content.split(','))
         except:
             pass
         
@@ -54,110 +51,175 @@ jobs:
         current_date = datetime.now().strftime('%Y%m%d')
         
         # Filter out old alerts (from previous days)
-        alerted_games = {g for g in alerted_games if g.startswith(current_date)}
+        alerted_matches = {m for m in alerted_matches if m.startswith(current_date)}
         
-        # Check for halftime games
-        halftime_games = []
+        # Check for matches starting soon and matches in 3rd set
+        starting_soon_matches = []
+        third_set_matches = []
         
         # Debug output
         print(f"\n📊 API Response Summary:")
-        print(f"Total games found: {len(data.get('events', []))}")
+        print(f"Total matches found: {len(data.get('events', []))}")
+        
         if data.get('events'):
-            print(f"\nAll games in response:")
+            print(f"\nAll matches in response:")
             for event in data['events']:
-                competition = event['competitions'][0]
-                status_detail = competition['status']['type']['detail']
-                home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
-                away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
-                if home_team and away_team:
-                    print(f"  - {away_team['team']['displayName']} @ {home_team['team']['displayName']} [{status_detail}]")
+                # Tennis API structure is different - competitors are at event level
+                status_detail = event['status']['type']['detail']
+                
+                competitors = event.get('competitors', [])
+                if len(competitors) >= 2:
+                    player1 = competitors[0]['athlete']['displayName']
+                    player2 = competitors[1]['athlete']['displayName']
+                    print(f"  - {player1} vs {player2} [{status_detail}]")
         
         if 'events' in data and data['events']:
             for event in data['events']:
-                game_id = event['id']
-                competition = event['competitions'][0]
-                status = competition['status']['type']['name']
-                status_detail = competition['status']['type']['detail']
-                display_clock = competition['status'].get('displayClock', '')
-                period = competition['status'].get('period', 0)
+                match_id = event['id']
+                # Tennis doesn't use 'competitions' - data is at event level
+                status = event['status']['type']['name']
+                status_detail = event['status']['type']['detail']
+                match_date = event.get('date')
                 
-                # Create unique daily key (date + game_id)
-                daily_game_key = f"{current_date}_{game_id}"
+                competitors = event.get('competitors', [])
+                if len(competitors) < 2:
+                    continue
                 
-                # Check if game is in 2nd half (period 2) with less than 10 minutes left
-                # AND not already alerted today
-                is_second_half = period == 2
-                is_in_progress = status == 'STATUS_IN_PROGRESS'
+                player1 = competitors[0]['athlete']['displayName']
+                player2 = competitors[1]['athlete']['displayName']
                 
-                # Parse clock time (format is usually "MM:SS" like "9:45" or "5:23")
-                time_under_10_min = False
-                if display_clock and ':' in display_clock:
+                # Create unique daily keys for different alert types
+                starting_key = f"{current_date}_{match_id}_starting"
+                third_set_key = f"{current_date}_{match_id}_thirdset"
+                
+                # Check for matches starting soon (within 20 minutes)
+                is_scheduled = status == 'STATUS_SCHEDULED'
+                within_alert_window = False
+                minutes_until = 0
+                
+                if match_date and is_scheduled:
                     try:
-                        parts = display_clock.split(':')
-                        minutes = int(parts[0])
-                        time_under_10_min = minutes < 10
+                        from datetime import datetime, timezone
+                        match_start = datetime.fromisoformat(match_date.replace('Z', '+00:00'))
+                        current_time_utc = datetime.now(timezone.utc)
+                        time_until_match = match_start - current_time_utc
+                        minutes_until = int(time_until_match.total_seconds() / 60)
+                        within_alert_window = 0 <= minutes_until <= 20
                     except:
                         pass
                 
-                if is_second_half and is_in_progress and time_under_10_min and daily_game_key not in alerted_games:
-                    home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
-                    away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
+                if is_scheduled and within_alert_window and starting_key not in alerted_matches:
+                    match_info = {
+                        'id': match_id,
+                        'key': starting_key,
+                        'player1': player1,
+                        'player2': player2,
+                        'minutes_until': minutes_until,
+                        'type': 'starting'
+                    }
+                    starting_soon_matches.append(match_info)
+                    alerted_matches.add(starting_key)
+                
+                # Check for matches in 3rd set
+                is_in_progress = status == 'STATUS_IN_PROGRESS'
+                
+                # Check if in 3rd set by looking at status detail or period
+                # Tennis typically has status like "Set 3" or similar
+                is_third_set = False
+                if is_in_progress:
+                    # Try to parse set number from status detail
+                    status_lower = status_detail.lower()
+                    if 'set 3' in status_lower or 'third set' in status_lower:
+                        is_third_set = True
                     
-                    if home_team and away_team:
-                        game = {
-                            'id': game_id,
-                            'daily_key': daily_game_key,
-                            'away_team': away_team['team']['displayName'],
-                            'away_score': away_team['score'],
-                            'home_team': home_team['team']['displayName'],
-                            'home_score': home_team['score'],
-                            'broadcast': competition.get('broadcasts', [{}])[0].get('names', ['No TV info'])[0] if competition.get('broadcasts') else 'No TV info',
-                            'time_remaining': display_clock
-                        }
-                        halftime_games.append(game)
-                        alerted_games.add(daily_game_key)
+                    # Also check period (if available)
+                    period = event['status'].get('period', 0)
+                    if period == 3:
+                        is_third_set = True
+                
+                if is_in_progress and is_third_set and third_set_key not in alerted_matches:
+                    # Get scores if available
+                    score1 = competitors[0].get('score', 'N/A')
+                    score2 = competitors[1].get('score', 'N/A')
+                    
+                    match_info = {
+                        'id': match_id,
+                        'key': third_set_key,
+                        'player1': player1,
+                        'player2': player2,
+                        'score1': score1,
+                        'score2': score2,
+                        'type': 'thirdset'
+                    }
+                    third_set_matches.append(match_info)
+                    alerted_matches.add(third_set_key)
         
-        # Send notifications for each halftime game
+        # Send notifications
         webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
         
-        if halftime_games and webhook_url:
-            for game in halftime_games:
-                # Create Slack message with rich formatting
-                slack_message = {
-                    "text": f"⏰ UNDER 10 MIN: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']} ({game['time_remaining']} left)",
-                    "blocks": [
-                        {
-                            "type": "header",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "⏰ UNDER 10 MINUTES",
-                                "emoji": True
+        all_matches = starting_soon_matches + third_set_matches
+        
+        if all_matches and webhook_url:
+            for match in all_matches:
+                if match['type'] == 'starting':
+                    # Starting soon alert
+                    slack_message = {
+                        "text": f"🎾 MATCH STARTING: {match['player1']} vs {match['player2']} in ~{match['minutes_until']} minutes",
+                        "blocks": [
+                            {
+                                "type": "header",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "🎾 MATCH STARTING SOON",
+                                    "emoji": True
+                                }
+                            },
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*{match['player1']}* vs *{match['player2']}*"
+                                }
+                            },
+                            {
+                                "type": "context",
+                                "elements": [
+                                    {
+                                        "type": "mrkdwn",
+                                        "text": f"⏰ Starting in ~{match['minutes_until']} minutes"
+                                    }
+                                ]
                             }
-                        },
-                        {
-                            "type": "section",
-                            "fields": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*{game['away_team']}*\n{game['away_score']} points"
-                                },
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"*{game['home_team']}*\n{game['home_score']} points"
+                        ]
+                    }
+                else:
+                    # 3rd set alert
+                    slack_message = {
+                        "text": f"🎾 THIRD SET: {match['player1']} vs {match['player2']}",
+                        "blocks": [
+                            {
+                                "type": "header",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "🎾 THIRD SET",
+                                    "emoji": True
                                 }
-                            ]
-                        },
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"⏱️ {game['time_remaining']} remaining • 📺 {game['broadcast']}"
-                                }
-                            ]
-                        }
-                    ]
-                }
+                            },
+                            {
+                                "type": "section",
+                                "fields": [
+                                    {
+                                        "type": "mrkdwn",
+                                        "text": f"*{match['player1']}*\n{match['score1']}"
+                                    },
+                                    {
+                                        "type": "mrkdwn",
+                                        "text": f"*{match['player2']}*\n{match['score2']}"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
                 
                 # Send to Slack
                 req = urllib.request.Request(
@@ -168,21 +230,21 @@ jobs:
                 
                 try:
                     with urllib.request.urlopen(req) as response:
-                        print(f"✓ Sent notification: {game['away_team']} vs {game['home_team']}")
+                        print(f"✓ Sent notification: {match['player1']} vs {match['player2']} ({match['type']})")
                 except Exception as e:
                     print(f"✗ Error sending notification: {e}")
         else:
-            print(f"\nNo NEW games under 10 minutes right now.")
+            print(f"\nNo new match alerts.")
         
-        # Save updated alerted games
-        with open('alerted_games.txt', 'w') as f:
-            f.write(','.join(sorted(alerted_games)))
+        # Save updated alerted matches
+        with open('alerted_matches.txt', 'w') as f:
+            f.write(','.join(sorted(alerted_matches)))
         
-        print(f"\nAlerted games today: {len(alerted_games)}")
+        print(f"\nAlerted matches today: {len(alerted_matches)}")
         EOF
         
         # Run the Python script
-        python3 check_halftime.py
+        python3 check_tennis.py
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     
@@ -190,6 +252,6 @@ jobs:
       run: |
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
-        git add alerted_games.txt || true
-        git commit -m "Update alerted games state [skip ci]" || true
+        git add alerted_matches.txt || true
+        git commit -m "Update alerted matches state [skip ci]" || true
         git push || true
