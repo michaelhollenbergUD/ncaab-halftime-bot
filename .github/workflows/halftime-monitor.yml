@@ -116,6 +116,10 @@ jobs:
                         }
                         halftime_games.append(game)
                         alerted_games.add(daily_game_key)
+                        
+                        # Immediately save to file after adding to prevent duplicates in same run
+                        with open('alerted_games.txt', 'w') as f:
+                            f.write(','.join(sorted(alerted_games)))
         
         # Send notifications for each game under 10 minutes
         webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
