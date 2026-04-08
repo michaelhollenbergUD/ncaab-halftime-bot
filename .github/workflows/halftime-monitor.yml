@@ -1,4 +1,4 @@
-name: NCAAB Under 10 Min Monitor
+name: Basketball Under 10 Min Monitor
 
 on:
   workflow_dispatch: # Allows manual trigger and API trigger
@@ -11,24 +11,22 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Check for games under 10 minutes
+    - name: Check for basketball games under 10 minutes
       run: |
         # Get today's date in Eastern Time (YYYYMMDD format)
-        # ESPN uses Eastern Time for college basketball games
         TODAY=$(TZ='America/New_York' date +%Y%m%d)
         
-        # Fetch ESPN scoreboard data with groups parameter to get ALL games (not just top 25)
-        # groups=50 gets all Division I games
-        # dates parameter ensures we get today's games in Eastern Time
-        response=$(curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY")
+        # Fetch ESPN scoreboard for NCAAB
+        echo "Fetching NCAAB games..."
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY" > ncaab_games.json
         
-        # Save to file for processing
-        echo "$response" > games.json
+        # Fetch ESPN scoreboard for NBA
+        echo "Fetching NBA games..."
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=$TODAY" > nba_games.json
         
         # Create state file if it doesn't exist
         touch alerted_games.txt
         
-        # Create Python script to process data
         cat << 'EOF' > check_halftime.py
         import json
         import os
@@ -36,9 +34,28 @@ jobs:
         import urllib.parse
         from datetime import datetime
         
-        # Read the games data
-        with open('games.json', 'r') as f:
-            data = json.load(f)
+        # Read both NCAAB and NBA games
+        all_games = []
+        
+        try:
+            with open('ncaab_games.json', 'r') as f:
+                ncaab_data = json.load(f)
+                if 'events' in ncaab_data:
+                    for event in ncaab_data['events']:
+                        event['league'] = 'NCAAB'
+                        all_games.append(event)
+        except Exception as e:
+            print(f"Error reading NCAAB: {e}")
+        
+        try:
+            with open('nba_games.json', 'r') as f:
+                nba_data = json.load(f)
+                if 'events' in nba_data:
+                    for event in nba_data['events']:
+                        event['league'] = 'NBA'
+                        all_games.append(event)
+        except Exception as e:
+            print(f"Error reading NBA: {e}")
         
         # Read previously alerted games
         alerted_games = set()
@@ -56,25 +73,30 @@ jobs:
         # Filter out old alerts (from previous days)
         alerted_games = {g for g in alerted_games if g.startswith(current_date)}
         
-        # Check for games under 10 minutes in 2nd half
+        # Check for games under 10 minutes in 2nd half/4th quarter
         halftime_games = []
         
         # Debug output
-        print(f"\n📊 API Response Summary:")
-        print(f"Total games found: {len(data.get('events', []))}")
-        if data.get('events'):
+        print(f"\n🏀 Basketball Games Summary:")
+        print(f"Total games found: {len(all_games)}")
+        if all_games:
             print(f"\nAll games in response:")
-            for event in data['events']:
-                competition = event['competitions'][0]
-                status_detail = competition['status']['type']['detail']
-                home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
-                away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
-                if home_team and away_team:
-                    print(f"  - {away_team['team']['displayName']} @ {home_team['team']['displayName']} [{status_detail}]")
+            for event in all_games:
+                try:
+                    league = event.get('league', 'Unknown')
+                    competition = event['competitions'][0]
+                    status_detail = competition['status']['type']['detail']
+                    home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
+                    away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
+                    if home_team and away_team:
+                        print(f"  [{league}] {away_team['team']['displayName']} @ {home_team['team']['displayName']} [{status_detail}]")
+                except:
+                    pass
         
-        if 'events' in data and data['events']:
-            for event in data['events']:
+        for event in all_games:
+            try:
                 game_id = event['id']
+                league = event.get('league', 'NCAAB')
                 competition = event['competitions'][0]
                 status = competition['status']['type']['name']
                 status_detail = competition['status']['type']['detail']
@@ -84,9 +106,9 @@ jobs:
                 # Create unique daily key (date + game_id)
                 daily_game_key = f"{current_date}_{game_id}"
                 
-                # Check if game is in 2nd half (period 2) with less than 10 minutes left
-                # AND not already alerted today
-                is_second_half = period == 2
+                # Check if game is in 2nd half (NCAAB period 2) or 4th quarter (NBA period 4)
+                # AND has less than 10 minutes left
+                is_final_period = (league == 'NCAAB' and period == 2) or (league == 'NBA' and period == 4)
                 is_in_progress = status == 'STATUS_IN_PROGRESS'
                 
                 # Parse clock time (format is usually "MM:SS" like "9:45" or "5:23")
@@ -99,7 +121,7 @@ jobs:
                     except:
                         pass
                 
-                if is_second_half and is_in_progress and time_under_10_min and daily_game_key not in alerted_games:
+                if is_final_period and is_in_progress and time_under_10_min and daily_game_key not in alerted_games:
                     home_team = next((t for t in competition['competitors'] if t['homeAway'] == 'home'), None)
                     away_team = next((t for t in competition['competitors'] if t['homeAway'] == 'away'), None)
                     
@@ -107,6 +129,7 @@ jobs:
                         game = {
                             'id': game_id,
                             'daily_key': daily_game_key,
+                            'league': league,
                             'away_team': away_team['team']['displayName'],
                             'away_score': away_team['score'],
                             'home_team': home_team['team']['displayName'],
@@ -120,6 +143,8 @@ jobs:
                         # Immediately save to file after adding to prevent duplicates in same run
                         with open('alerted_games.txt', 'w') as f:
                             f.write(','.join(sorted(alerted_games)))
+            except Exception as e:
+                print(f"Error processing game: {e}")
         
         # Send notifications for each game under 10 minutes
         webhook_url = os.environ.get('SLACK_WEBHOOK_URL')
@@ -127,14 +152,15 @@ jobs:
         if halftime_games and webhook_url:
             for game in halftime_games:
                 # Create Slack message with rich formatting
+                league_emoji = "🏀" if game['league'] == 'NCAAB' else "🏀"
                 slack_message = {
-                    "text": f"⏰ UNDER 10 MIN: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']} ({game['time_remaining']} left)",
+                    "text": f"{league_emoji} {game['league']} UNDER 10 MIN: {game['away_team']} {game['away_score']} - {game['home_score']} {game['home_team']} ({game['time_remaining']} left)",
                     "blocks": [
                         {
                             "type": "header",
                             "text": {
                                 "type": "plain_text",
-                                "text": "⏰ UNDER 10 MINUTES",
+                                "text": f"{league_emoji} {game['league']} - UNDER 10 MINUTES",
                                 "emoji": True
                             }
                         },
