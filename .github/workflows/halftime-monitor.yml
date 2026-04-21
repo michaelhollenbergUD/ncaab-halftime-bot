@@ -13,16 +13,19 @@ jobs:
       
     - name: Check for basketball games under 10 minutes
       run: |
-        # Get today's date in Eastern Time (YYYYMMDD format)
+        # Get today's and yesterday's dates in Eastern Time (YYYYMMDD format)
         TODAY=$(TZ='America/New_York' date +%Y%m%d)
+        YESTERDAY=$(TZ='America/New_York' date -d 'yesterday' +%Y%m%d)
         
-        # Fetch ESPN scoreboard for NCAAB
+        # Fetch ESPN scoreboard for NCAAB (today and yesterday)
         echo "Fetching NCAAB games..."
-        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY" > ncaab_games.json
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$TODAY" > ncaab_today.json
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=50&dates=$YESTERDAY" > ncaab_yesterday.json
         
-        # Fetch ESPN scoreboard for NBA
+        # Fetch ESPN scoreboard for NBA (today and yesterday)
         echo "Fetching NBA games..."
-        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=$TODAY" > nba_games.json
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=$TODAY" > nba_today.json
+        curl -s "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=$YESTERDAY" > nba_yesterday.json
         
         # Create state file if it doesn't exist
         touch alerted_games.txt
@@ -34,28 +37,26 @@ jobs:
         import urllib.parse
         from datetime import datetime
         
-        # Read both NCAAB and NBA games
+        # Read both NCAAB and NBA games from today and yesterday
         all_games = []
         
-        try:
-            with open('ncaab_games.json', 'r') as f:
-                ncaab_data = json.load(f)
-                if 'events' in ncaab_data:
-                    for event in ncaab_data['events']:
-                        event['league'] = 'NCAAB'
-                        all_games.append(event)
-        except Exception as e:
-            print(f"Error reading NCAAB: {e}")
+        files = [
+            ('ncaab_today.json', 'NCAAB'),
+            ('ncaab_yesterday.json', 'NCAAB'),
+            ('nba_today.json', 'NBA'),
+            ('nba_yesterday.json', 'NBA')
+        ]
         
-        try:
-            with open('nba_games.json', 'r') as f:
-                nba_data = json.load(f)
-                if 'events' in nba_data:
-                    for event in nba_data['events']:
-                        event['league'] = 'NBA'
-                        all_games.append(event)
-        except Exception as e:
-            print(f"Error reading NBA: {e}")
+        for filename, league_name in files:
+            try:
+                with open(filename, 'r') as f:
+                    data = json.load(f)
+                    if 'events' in data:
+                        for event in data['events']:
+                            event['league'] = league_name
+                            all_games.append(event)
+            except Exception as e:
+                print(f"Error reading {filename}: {e}")
         
         # Read previously alerted games
         alerted_games = set()
